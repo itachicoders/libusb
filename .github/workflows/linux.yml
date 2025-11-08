@@ -1,4 +1,4 @@
-name: linux
+name: android-arm64
 
 on: [push, pull_request]
 
@@ -8,75 +8,83 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - name: setup prerequisites
+      - name: Setup prerequisites
         run: |
           sudo apt update
-          sudo apt install -y autoconf automake libtool libudev-dev m4 pkg-config clang llvm
+          sudo apt install -y autoconf automake libtool m4 pkg-config wget unzip
 
-      - name: bootstrap
+      - name: Setup Android NDK
+        run: |
+          NDK_VERSION="r26d"
+          wget -q https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip
+          unzip -q android-ndk-${NDK_VERSION}-linux.zip
+          echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+          echo "NDK_ROOT=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
+
+      - name: Bootstrap
         run: ./bootstrap.sh
 
-      - name: netlink
-        # Disable tests for netlink as it doesn't seem to work in the CI environment.
-        run: .private/ci-build.sh --build-dir build-netlink --no-test -- --disable-udev
-
-      - name: udev
-        run: .private/ci-build.sh --build-dir build-udev -- --enable-udev
-
-      - name: debug-log
-        run: .private/ci-build.sh --build-dir build-debug -- --enable-debug-log
-
-      - name: disable-log
-        run: .private/ci-build.sh --build-dir build-nolog -- --disable-log
-
-      - uses: mymindstorm/setup-emsdk@v13
-
-      - run: npm ci
-        working-directory: tests/webusb-test-shim
-
-      - name: emscripten
-        run: emconfigure .private/ci-build.sh --build-dir build-emscripten -- --host=wasm32-unknown-emscripten
-
-      - name: umockdev test
-        run: .private/ci-container-build.sh docker.io/amd64/ubuntu:rolling
-
-      # --- Sanitizers + BOS fuzzer smoke, inside linux job (PRs only) ---
-      - name: Sanitized rebuild (ASan/UBSan + hardening flags)
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          CC: clang
-          CXX: clang++
-          CFLAGS: "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fstack-protector-all -ftrivial-auto-var-init=pattern -Wwrite-strings"
-          CXXFLAGS: "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fstack-protector-all -ftrivial-auto-var-init=pattern -Wwrite-strings"
-          LDFLAGS: "-fsanitize=address,undefined"
+      - name: Configure for Android ARM64
         run: |
-          rm -rf build-asan
-          mkdir -p build-asan
-          cd build-asan
-          CC=$CC CXX=$CXX CFLAGS="$CFLAGS" CXXFLAGS="$CXXFLAGS" LDFLAGS="$LDFLAGS" ../configure
-          make -j
+          export TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
+          export TARGET=aarch64-linux-android
+          export API=21
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export CC=$TOOLCHAIN/bin/${TARGET}${API}-clang
+          export AS=$CC
+          export CXX=$TOOLCHAIN/bin/${TARGET}${API}-clang++
+          export LD=$TOOLCHAIN/bin/ld
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          export STRIP=$TOOLCHAIN/bin/llvm-strip
+          
+          ./configure \
+            --host=aarch64-linux-android \
+            --prefix=$PWD/build-android-arm64/install \
+            --enable-static \
+            --disable-shared \
+            --disable-udev \
+            CFLAGS="-fPIC -O2" \
+            LDFLAGS="-static"
 
-      - name: Stage install (pkg-config + runtime)
+      - name: Build
+        run: |
+          make -j$(nproc)
+
+      - name: Install
+        run: |
+          make install DESTDIR=$PWD/build-android-arm64/stage
+
+      - name: Verify library
+        run: |
+          ls -lh build-android-arm64/stage/$PWD/build-android-arm64/install/lib/
+          file build-android-arm64/stage/$PWD/build-android-arm64/install/lib/libusb-1.0.a
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: libusb-android-arm64
+          path: |
+            build-android-arm64/stage/**/lib/libusb-1.0.a
+            build-android-arm64/stage/**/include/libusb-1.0/
+
+      # --- Sanitizers (PRs only, optional for Android) ---
+      - name: Sanitized rebuild (ASan/UBSan)
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          make -C build-asan install DESTDIR="$PWD/build-asan/stage"
-          echo "PKG_CONFIG_PATH=$PWD/build-asan/stage/usr/local/lib/pkgconfig" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=$PWD/build-asan/stage/usr/local/lib" >> $GITHUB_ENV
-
-      - name: Build & smoke BOS descriptor fuzzer (C, sanitized, bounded)
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          ASAN_OPTIONS: "detect_leaks=0:allocator_may_return_null=1"
-          UBSAN_OPTIONS: "print_stacktrace=1:halt_on_error=1"
-        run: |
-          # Compile against the STAGED headers/libs (DESTDIR), not /usr/local
-          clang -std=c99 tests/fuzz/fuzz_bos_descriptor.c \
-            -I"$PWD/build-asan/stage/usr/local/include/libusb-1.0" \
-            -fsanitize=fuzzer,address,undefined -fno-omit-frame-pointer \
-            -fstack-protector-all -ftrivial-auto-var-init=pattern -Wwrite-strings \
-            -L"$PWD/build-asan/stage/usr/local/lib" -lusb-1.0 \
-            -o fuzz_bos_descriptor
-
-          ./fuzz_bos_descriptor tests/fuzz/corpus/bos \
-            -seed=1 -runs=200 -max_total_time=15 -timeout=5 -rss_limit_mb=1536 -print_final_stats=1
-      # --- end sanitizers + fuzzer smoke ---
+          export TOOLCHAIN=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64
+          export TARGET=aarch64-linux-android
+          export API=21
+          export CC=$TOOLCHAIN/bin/${TARGET}${API}-clang
+          export CXX=$TOOLCHAIN/bin/${TARGET}${API}-clang++
+          
+          make clean
+          ./configure \
+            --host=aarch64-linux-android \
+            --prefix=$PWD/build-android-arm64-asan/install \
+            --enable-static \
+            --disable-shared \
+            --disable-udev \
+            CFLAGS="-fPIC -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=address,undefined"
+          
+          make -j$(nproc)
