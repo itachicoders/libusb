@@ -1,0 +1,88 @@
+name: Build libusb (Static 64-bit for Linux & Android)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-linux:
+    name: Build for Linux x86_64
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential autoconf automake libtool pkg-config
+
+      - name: Prepare build system
+        run: ./autogen.sh
+
+      - name: Configure for 64-bit static build
+        run: |
+          ./configure CFLAGS="-m64" LDFLAGS="-m64" --enable-static --disable-shared
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libusb-linux-x86_64
+          path: |
+            **/*.a
+
+  build-android:
+    name: Build for Android arm64-v8a
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y autoconf automake libtool pkg-config
+
+      - name: Prepare build system
+        run: ./autogen.sh
+
+      - name: Configure for Android arm64-v8a
+        env:
+          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export TARGET=aarch64-linux-android
+          export API=24
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
+          export CXX=$TOOLCHAIN/bin/$TARGET$API-clang++
+          export LD=$TOOLCHAIN/bin/ld
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          ./configure \
+            --host=$TARGET \
+            --enable-static \
+            --disable-shared \
+            CFLAGS="-fPIC"
+
+      - name: Build
+        run: make -j$(nproc)
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libusb-android-arm64-v8a
+          path: |
+            **/*.a
