@@ -21,7 +21,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
           echo "NDK_ROOT=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
-      - name: Bootstrap
+      - name: Bootstraps
         run: ./bootstrap.sh
 
       - name: Configure for Android ARM64
