@@ -1,4 +1,4 @@
-name: android-arm64
+name: Build libusb Android (arm64-v8a)
 
 on:
   workflow_dispatch:
@@ -7,64 +7,48 @@ on:
   pull_request:
 
 jobs:
-  build:
+  build-android-arm64:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Install prerequisites
-        run: |
-          sudo apt update
-          sudo apt install -y autoconf automake libtool pkg-config ninja-build
-
-      - name: Setup Android NDK
-        id: setup-ndk
-        uses: nttld/setup-ndk@v1
+      - name: Checkout libusb source
+        uses: actions/checkout@v4
         with:
-          ndk-version: r26d
+          repository: itachicoders/libusb
+          path: libusb
 
-      - name: Show NDK path
-        run: echo "NDK path: ${{ steps.setup-ndk.outputs.ndk-path }}"
-
-      - name: Bootstrap
-        run: ./bootstrap.sh
-
-      - name: Configure for Android arm64
-        env:
-          NDK: ${{ steps.setup-ndk.outputs.ndk-path }}
+      - name: Install dependencies
         run: |
-          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
-          export TARGET=aarch64-linux-android
-          export API=24
-          export AR=$TOOLCHAIN/bin/llvm-ar
-          export AS=$TOOLCHAIN/bin/llvm-as
-          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
-          export CXX=$TOOLCHAIN/bin/$TARGET$API-clang++
-          export LD=$TOOLCHAIN/bin/ld
-          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
-          export STRIP=$TOOLCHAIN/bin/llvm-strip
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build unzip wget autoconf automake libtool
 
-          mkdir -p build-android
-          cd build-android
-
-          ../configure \
-            --host=$TARGET \
-            --enable-static \
-            --disable-shared \
-            --disable-udev \
-            CFLAGS="-fPIC -O2" \
-            LDFLAGS="-static"
-
-      - name: Build libusb.a
+      - name: Download Android NDK
         run: |
-          cd build-android
-          make -j$(nproc)
-          find . -name "*.a"
+          wget https://dl.google.com/android/repository/android-ndk-r26d-linux.zip
+          unzip -q android-ndk-r26d-linux.zip
+          mv android-ndk-r26d $HOME/android-ndk
+          echo "NDK=$HOME/android-ndk" >> $GITHUB_ENV
 
-      - name: Upload libusb.a artifact
+      - name: Configure CMake for arm64-v8a
+        run: |
+          cd libusb
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-21 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DLIBUSB_BUILD_TESTS=OFF \
+            -G Ninja
+
+      - name: Build static libusb.a
+        run: |
+          cd libusb/build
+          ninja
+
+      - name: Upload libusb.a
         uses: actions/upload-artifact@v4
         with:
-          name: libusb-android-arm64
-          path: |
-            build-android/**/*.a
+          name: libusb-arm64-v8a
+          path: libusb/build/libusb/*.a
