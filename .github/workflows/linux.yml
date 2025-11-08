@@ -21,7 +21,7 @@ jobs:
           echo "ANDROID_NDK_HOME=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
           echo "NDK_ROOT=$PWD/android-ndk-${NDK_VERSION}" >> $GITHUB_ENV
 
-      - name: Bootstraps
+      - name: Bootstrap
         run: ./bootstrap.sh
 
       - name: Configure for Android ARM64
@@ -39,7 +39,7 @@ jobs:
           
           ./configure \
             --host=aarch64-linux-android \
-            --prefix=$PWD/build-android-arm64/install \
+            --prefix=/usr/local \
             --enable-static \
             --disable-shared \
             --disable-udev \
@@ -50,22 +50,28 @@ jobs:
         run: |
           make -j$(nproc)
 
-      - name: Install
+      - name: Install to staging directory
         run: |
-          make install DESTDIR=$PWD/build-android-arm64/stage
+          mkdir -p staging
+          make install DESTDIR=$PWD/staging
 
       - name: Verify library
         run: |
-          ls -lh build-android-arm64/stage/$PWD/build-android-arm64/install/lib/
-          file build-android-arm64/stage/$PWD/build-android-arm64/install/lib/libusb-1.0.a
+          find staging -name "*.a" -exec ls -lh {} \;
+          find staging -name "*.a" -exec file {} \;
+
+      - name: Prepare artifacts
+        run: |
+          mkdir -p artifacts/lib
+          mkdir -p artifacts/include
+          cp -r staging/usr/local/lib/*.a artifacts/lib/ || true
+          cp -r staging/usr/local/include/libusb-1.0 artifacts/include/ || true
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: libusb-android-arm64
-          path: |
-            build-android-arm64/stage/**/lib/libusb-1.0.a
-            build-android-arm64/stage/**/include/libusb-1.0/
+          path: artifacts/
 
       # --- Sanitizers (PRs only, optional for Android) ---
       - name: Sanitized rebuild (ASan/UBSan)
@@ -80,7 +86,7 @@ jobs:
           make clean
           ./configure \
             --host=aarch64-linux-android \
-            --prefix=$PWD/build-android-arm64-asan/install \
+            --prefix=/usr/local \
             --enable-static \
             --disable-shared \
             --disable-udev \
