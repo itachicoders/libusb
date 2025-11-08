@@ -20,7 +20,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build unzip wget autoconf automake libtool
+          sudo apt-get install -y autoconf automake libtool pkg-config wget unzip
 
       - name: Download Android NDK
         run: |
@@ -29,26 +29,34 @@ jobs:
           mv android-ndk-r26d $HOME/android-ndk
           echo "NDK=$HOME/android-ndk" >> $GITHUB_ENV
 
-      - name: Configure CMake for arm64-v8a
+      - name: Set environment for arm64-v8a
         run: |
-          cd libusb
-          mkdir -p build && cd build
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=$NDK/build/cmake/android.toolchain.cmake \
-            -DANDROID_ABI=arm64-v8a \
-            -DANDROID_PLATFORM=android-21 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF \
-            -DLIBUSB_BUILD_TESTS=OFF \
-            -G Ninja
+          export TOOLCHAIN=$NDK/toolchains/llvm/prebuilt/linux-x86_64
+          export TARGET=aarch64-linux-android
+          export API=21
+          export AR=$TOOLCHAIN/bin/llvm-ar
+          export AS=$TOOLCHAIN/bin/$TARGET$API-as
+          export CC=$TOOLCHAIN/bin/$TARGET$API-clang
+          export CXX=$TOOLCHAIN/bin/$TARGET$API-clang++
+          export LD=$TOOLCHAIN/bin/ld
+          export RANLIB=$TOOLCHAIN/bin/llvm-ranlib
+          export STRIP=$TOOLCHAIN/bin/llvm-strip
+          export PATH=$TOOLCHAIN/bin:$PATH
 
-      - name: Build static libusb.a
-        run: |
-          cd libusb/build
-          ninja
+          cd libusb
+          ./autogen.sh
+          mkdir -p build && cd build
+          ../configure \
+            --host=$TARGET \
+            --enable-static \
+            --disable-shared \
+            --disable-udev \
+            CFLAGS="-fPIC" \
+            LDFLAGS="-static"
+          make -j$(nproc)
 
       - name: Upload libusb.a
         uses: actions/upload-artifact@v4
         with:
           name: libusb-arm64-v8a
-          path: libusb/build/libusb/*.a
+          path: libusb/build/libusb/.libs/libusb-1.0.a
